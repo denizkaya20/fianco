@@ -21,11 +21,74 @@ def initialize_zobrist():
                 ZOBRIST[(row, col, owner_id)] = random.getrandbits(64)
 # --------------------------------------
 
+def get_all_possible_capture_moves(game, player):
+    """ Sadece capture (yeme) hamlelerini döndürür.
+        İnsan tarafı da fianco.py içerisinden buna erişebilir.
+    """
+    capture_moves = []
+    for piece in game.pieces:
+        if piece.owner == player:
+            # Yeme için çift atlama bakıyoruz
+            if player == 'Player1':
+                poss = [
+                    (piece.row + 2, piece.col + 2),
+                    (piece.row + 2, piece.col - 2)
+                ]
+            else:
+                poss = [
+                    (piece.row - 2, piece.col + 2),
+                    (piece.row - 2, piece.col - 2)
+                ]
+            for (r, c) in poss:
+                is_ok, _, cap = game.is_valid_move(piece, r, c)
+                if is_ok and cap is not None:
+                    capture_moves.append((piece, r, c, cap))
+    return capture_moves
+
+def get_all_possible_moves(game, player):
+    """ Oyuncu player için tüm olası hamleleri döndürür.
+        Eğer herhangi bir capture hamlesi varsa, normal hamleler
+        listeden çıkar (mandatory capture).
+    """
+    all_moves = []
+    capture_moves = []
+
+    for piece in game.pieces:
+        if piece.owner == player:
+            if player == 'Player1':
+                poss = [
+                    (piece.row + 1, piece.col),
+                    (piece.row, piece.col + 1),
+                    (piece.row, piece.col - 1),
+                    (piece.row + 2, piece.col + 2),
+                    (piece.row + 2, piece.col - 2)
+                ]
+            else:
+                poss = [
+                    (piece.row - 1, piece.col),
+                    (piece.row, piece.col + 1),
+                    (piece.row, piece.col - 1),
+                    (piece.row - 2, piece.col + 2),
+                    (piece.row - 2, piece.col - 2)
+                ]
+            for (r, c) in poss:
+                is_ok, _, cap = game.is_valid_move(piece, r, c)
+                if is_ok:
+                    if cap is not None:
+                        capture_moves.append((piece, r, c, cap))
+                    else:
+                        all_moves.append((piece, r, c, None))
+
+    # ZORUNLU YEME
+    if capture_moves:
+        return capture_moves
+    return all_moves
+
+
+# ------------------ AI Search (Negamax) --------------------
 
 def make_ai_move(game):
-    """ Orijinal Fianco.make_ai_move() fonksiyonu, Fianco nesnesini 'game' parametresi
-        olarak alacak şekilde yeniden düzenlendi.
-    """
+    """ AI'nin hamle yapması. """
     start_ms = time.time() * 1000
     best_move = None
     depth_reached = 1
@@ -60,17 +123,24 @@ def make_ai_move(game):
     else:
         print("[AI] No valid move found. pass")
 
-
 def negamax_root(game, depth, alpha, beta):
     moves = get_all_possible_moves(game, game.current_player)
     moves = order_moves(game, moves, depth)
 
     best_score = -999999
     best_move = None
+    original_alpha = alpha
+
+    board_hash = get_board_hash(game)
+    # TT key: (board_hash, depth, alpha, beta)
+    # root'ta alpha/beta sabit gibi, ama yine de kaydedebiliriz
+
     for move in moves:
         prev = game.make_move(move, store_previous_state=True)
         game.current_player = 'Player2' if game.current_player == 'Player1' else 'Player1'
+
         score = -negamax(game, depth - 1, -beta, -alpha, 1)
+
         game.unmake_move(prev)
 
         if score > best_score:
@@ -81,23 +151,49 @@ def negamax_root(game, depth, alpha, beta):
         if alpha >= beta:
             game.prune_count += 1
             break
-    return best_move
 
+    # TT Bound ve best_move saklama
+    if best_score <= original_alpha:
+        bound_flag = 'UPPER'
+    elif best_score >= beta:
+        bound_flag = 'LOWER'
+    else:
+        bound_flag = 'EXACT'
+
+    tt_key = (board_hash, depth, original_alpha, beta)
+    game.ttable[tt_key] = {
+        "score": best_score,
+        "flag": bound_flag,
+        "best_move": best_move
+    }
+
+    return best_move
 
 def negamax(game, depth, alpha, beta, color):
     if depth == 0 or game.game_over:
         game.nodes_searched += 1
         return evaluate_position(game) * color
 
+    # TT sorgusu
     board_hash = get_board_hash(game)
+    original_alpha = alpha
     tt_key = (board_hash, depth, alpha, beta)
 
-    # Transposition Table sorgusu
     game.tt_accesses += 1
     if tt_key in game.ttable:
         entry = game.ttable[tt_key]
-        game.nodes_searched += 1
-        return entry["score"]
+        flag = entry.get("flag", "EXACT")
+        cached_score = entry["score"]
+
+        # TT Bound kullanımı
+        if flag == 'EXACT':
+            return cached_score
+        elif flag == 'LOWER':  # score >= gerçek beta
+            alpha = max(alpha, cached_score)
+        elif flag == 'UPPER':  # score <= gerçek alpha
+            beta = min(beta, cached_score)
+        if alpha >= beta:
+            return cached_score
 
     moves = get_all_possible_moves(game, game.current_player)
     if not moves:
@@ -106,6 +202,7 @@ def negamax(game, depth, alpha, beta, color):
 
     moves = order_moves(game, moves, depth)
     best_score = -999999
+    best_move = None
 
     for move in moves:
         prev = game.make_move(move, store_previous_state=True)
@@ -115,25 +212,37 @@ def negamax(game, depth, alpha, beta, color):
 
         if score > best_score:
             best_score = score
+            best_move = move
         if best_score > alpha:
             alpha = best_score
         if alpha >= beta:
             game.prune_count += 1
-            # Killer Move güncelle
+            # killer move
             kset = game.killer_moves.get(depth, set())
             kset.add(move)
             game.killer_moves[depth] = kset
             break
 
-    game.ttable[tt_key] = {"score": best_score}
+    # TT'ye kaydet
+    if best_score <= original_alpha:
+        bound_flag = 'UPPER'
+    elif best_score >= beta:
+        bound_flag = 'LOWER'
+    else:
+        bound_flag = 'EXACT'
+
+    game.ttable[tt_key] = {
+        "score": best_score,
+        "flag": bound_flag,
+        "best_move": best_move
+    }
     return best_score
 
-
 def evaluate_position(game):
+    # Basit evaluate: Beyaz taş sayısı - Siyah taş sayısı
     w = len([p for p in game.pieces if p.owner == 'Player1'])
     b = len([p for p in game.pieces if p.owner == 'Player2'])
     return w - b
-
 
 def get_board_hash(game):
     h = 0
@@ -142,50 +251,40 @@ def get_board_hash(game):
         h ^= ZOBRIST[(p.row, p.col, oid)]
     return h
 
-
 def order_moves(game, moves, depth):
     """
-    1) Yeme (capture) hamleleri
-    2) Killer hamleler
-    3) Normal hamleler
+    1) TT move
+    2) Capture
+    3) Killer
+    4) Normal
     """
+    # TT move bul
+    board_hash = get_board_hash(game)
+    best_move_from_tt = None
+    # En basit yoldan: tabloyu gezip
+    for key, entry in game.ttable.items():
+        # key: (hash, d, a, b)
+        if key[0] == board_hash and key[1] == depth:
+            bm = entry.get("best_move", None)
+            if bm:
+                best_move_from_tt = bm
+                break
+
     captures = []
     killers = []
     normal = []
     kset = game.killer_moves.get(depth, set())
 
     for m in moves:
-        if m[3] is not None:  # 'captured' parçası varsa
+        piece, r, c, captured = m
+        if best_move_from_tt is not None and m == best_move_from_tt:
+            # TT move en başa
+            captures.insert(0, m)  # liste başına ekleyelim
+        elif captured is not None:
             captures.append(m)
         elif m in kset:
             killers.append(m)
         else:
             normal.append(m)
+
     return captures + list(killers) + normal
-
-
-def get_all_possible_moves(game, player):
-    moves = []
-    for piece in game.pieces:
-        if piece.owner == player:
-            if player == 'Player1':
-                poss = [
-                    (piece.row + 1, piece.col),
-                    (piece.row, piece.col + 1),
-                    (piece.row, piece.col - 1),
-                    (piece.row + 2, piece.col + 2),
-                    (piece.row + 2, piece.col - 2)
-                ]
-            else:
-                poss = [
-                    (piece.row - 1, piece.col),
-                    (piece.row, piece.col + 1),
-                    (piece.row, piece.col - 1),
-                    (piece.row - 2, piece.col + 2),
-                    (piece.row - 2, piece.col - 2)
-                ]
-            for (r, c) in poss:
-                is_ok, _, cap = game.is_valid_move(piece, r, c)
-                if is_ok:
-                    moves.append((piece, r, c, cap))
-    return moves

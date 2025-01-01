@@ -4,15 +4,16 @@ import time
 
 # board.py ve ui.py'den import
 from board import (BOARD_SIZE, TILE_SIZE, BOARD_OFFSET_X, BOARD_OFFSET_Y,
-                    SCOREBOARD_WIDTH, WIDTH, HEIGHT, FPS,
-                    WOOD_COLOR, BLACK, WHITE, ERROR_OVERLAY_COLOR, Piece)
+                   SCOREBOARD_WIDTH, WIDTH, HEIGHT, FPS,
+                   WOOD_COLOR, BLACK, WHITE, ERROR_OVERLAY_COLOR, Piece)
 from ui import Button
 # ai.py'den import
-from ai import (ZOBRIST, initialize_zobrist)
+from ai import (ZOBRIST, initialize_zobrist, get_all_possible_moves,
+                get_all_possible_capture_moves, make_ai_move)
 
 pygame.init()
 
-# Fontlar (UI ile ilgili oldukları için board.py'ye de konulabilirdi, ama buraya da alabiliriz)
+# Fontlar
 FONT_SMALL = pygame.font.SysFont('Arial', 20)
 FONT_MEDIUM = pygame.font.SysFont('Arial', 28)
 FONT_LARGE = pygame.font.SysFont('Arial', 54)
@@ -22,11 +23,9 @@ PLAYERS = {
     'Player2': {'name': 'Black', 'color': BLACK}
 }
 
-
 def quit_game():
     pygame.quit()
     sys.exit()
-
 
 # Zobrist hashing'i başlat
 initialize_zobrist()
@@ -37,7 +36,7 @@ class Fianco:
         pygame.display.set_caption('FIANCO GAME')
         self.clock = pygame.time.Clock()
 
-        self.state = 'menu'  # Başlangıç: Menü
+        self.state = 'menu'  # OYUN İLK AÇILDIĞINDA MENÜDE BAŞLA
         self.human_player = None
         self.ai_player = None
 
@@ -81,6 +80,7 @@ class Fianco:
         menu_button_bg = WHITE
         menu_button_text = BLACK
 
+        # MENÜ EKRANINDAKİ DÜĞMELER
         self.menu_play_white_button = Button(
             x=WIDTH // 2 - menu_button_width - 20,
             y=HEIGHT // 2,
@@ -111,10 +111,11 @@ class Fianco:
         button_bg_color = WHITE
         button_text_color = BLACK
 
+        # OYUN İÇİ DÜĞMELER
         self.restart_button = Button(
             x=BOARD_OFFSET_X, y=base_y, width=button_width, height=button_height,
             text='Restart', font=button_font, bg_color=button_bg_color, text_color=button_text_color,
-            action=self.reset_game
+            action=self.back_to_menu  # ARTIK MENÜYE DÖNMEK
         )
         self.in_game_quit_button = Button(
             x=BOARD_OFFSET_X + button_width + 10, y=base_y, width=button_width, height=button_height,
@@ -122,6 +123,7 @@ class Fianco:
             action=quit_game
         )
 
+        # OYUN BİTİNCE GÖRÜNEN DÜĞMELER
         game_over_button_width = 200
         game_over_button_height = 60
         game_over_button_font = pygame.font.SysFont('Arial', 28)
@@ -129,7 +131,7 @@ class Fianco:
             x=WIDTH // 2 - game_over_button_width // 2, y=HEIGHT // 2 + 20,
             width=game_over_button_width, height=game_over_button_height,
             text='Restart Game', font=game_over_button_font, bg_color=button_bg_color, text_color=button_text_color,
-            action=self.reset_game
+            action=self.back_to_menu  # MENÜYE DÖN
         )
         self.game_over_quit_button = Button(
             x=WIDTH // 2 - game_over_button_width // 2, y=HEIGHT // 2 + 100,
@@ -143,7 +145,6 @@ class Fianco:
         close_button_image = pygame.Surface((30, 30), pygame.SRCALPHA)
         close_button_image.blit(close_button_text, (5, 0))
 
-        import pygame
         close_button_rect = pygame.Rect(0, 0, 30, 30)
         close_button_rect.x = (self.window.get_width() - 50)
         close_button_rect.y = 10
@@ -154,7 +155,17 @@ class Fianco:
             action=self.close_error_message, image=close_button_image
         )
 
+    def back_to_menu(self):
+        """ Oyun içinden veya game_over ekranından
+            menüye geri dönmek için çağırılır.
+        """
+        self.state = 'menu'
+        self.error_message = ''
+        self.show_error = False
+        # Taşlar vb. sıfırlamadık. Menüde tekrar 'Play as White/Black' seçilince reset_game yapılacak.
+
     def select_color(self, color):
+        """ Kullanıcı menüdeyken White/Siyah seçince çağrılır. """
         if color == 'white':
             self.human_player = 'Player1'
             self.ai_player = 'Player2'
@@ -162,8 +173,9 @@ class Fianco:
             self.human_player = 'Player2'
             self.ai_player = 'Player1'
 
-        self.state = 'game'
+        # Renk seçildikten sonra oyunu sıfırla + oyuna geç
         self.reset_game()
+        self.state = 'game'
 
     def close_error_message(self):
         self.show_error = False
@@ -329,6 +341,7 @@ class Fianco:
         piece.reset_position()
 
     def is_valid_move(self, piece, r, c):
+        # (Aynı kalabilir veya ufak iyileştirmeler)
         if piece.row == r and piece.col == c:
             return False, "", None
         if r < 0 or r >= BOARD_SIZE or c < 0 or c >= BOARD_SIZE:
@@ -345,13 +358,17 @@ class Fianco:
         dr = r - piece.row
         dc = c - piece.col
 
+        # Geri gitmeyi engellemek, vs.
         if dr == -fw:
             return False, "", None
 
+        # Normal yürüyüş
         if dr == fw and dc == 0:
             return True, "", None
+        # Yan hareket
         elif dr == 0 and abs(dc) == 1:
             return True, "", None
+        # Capture hamlesi
         elif dr == fw * 2 and abs(dc) == 2:
             middle_row = piece.row + fw
             middle_col = piece.col + (dc // 2)
@@ -379,6 +396,10 @@ class Fianco:
         return None
 
     def reset_game(self):
+        """ Tüm oyun verilerini sıfırlar.
+            Artık state'i burada 'game' yapmıyoruz.
+            Renk seçilince veya menüden oyuna dönünce set ediyoruz.
+        """
         self.create_initial_pieces()
         self.selected_piece = None
         self.current_player = self.human_player
@@ -390,7 +411,7 @@ class Fianco:
         self.must_continue_capture = False
         self.captured_white.clear()
         self.captured_black.clear()
-        self.state = 'game'
+
         self.player_times['Player1'] = 600000
         self.player_times['Player2'] = 600000
         self.last_update_time = pygame.time.get_ticks()
@@ -453,10 +474,8 @@ class Fianco:
         if store_previous_state:
             return prev
 
-        # Burada eğer oyun bitmediyse ve şu an AI sırası ise,
-        # AI hamlesi ai.py içindeki make_ai_move fonksiyonuna paslanıyor.
+        # Eğer oyun bitmediyse ve şu an AI sırası ise:
         if not self.game_over and self.current_player == self.ai_player:
-            from ai import make_ai_move
             make_ai_move(self)
 
     def unmake_move(self, prev):
@@ -528,6 +547,9 @@ class Fianco:
                                     break
                         else:
                             rr, cc = self.get_mouse_board_position(pos)
+                            from ai import get_all_possible_capture_moves
+                            all_capture_moves = get_all_possible_capture_moves(self, self.current_player)
+
                             if 0 <= rr < BOARD_SIZE and 0 <= cc < BOARD_SIZE:
                                 clicked_piece = self.get_piece_at_position(rr, cc)
                                 if clicked_piece and clicked_piece.owner == self.current_player:
@@ -535,10 +557,16 @@ class Fianco:
                                 else:
                                     is_ok, _, cap = self.is_valid_move(self.selected_piece, rr, cc)
                                     if is_ok:
-                                        self.make_move((self.selected_piece, rr, cc, cap))
-                                        self.error_message = ''
-                                        if self.game_over:
-                                            return
+                                        # Zorunlu yeme
+                                        if all_capture_moves and cap is None:
+                                            self.error_message = 'Capture is mandatory!'
+                                            self.show_error = True
+                                            self.error_start_time = pygame.time.get_ticks()
+                                        else:
+                                            self.make_move((self.selected_piece, rr, cc, cap))
+                                            self.error_message = ''
+                                            if self.game_over:
+                                                return
                                     else:
                                         self.error_message = 'Invalid Move!'
                                         self.show_error = True
