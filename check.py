@@ -1,8 +1,6 @@
 import pygame
 import sys
 import time
-import random
-import numpy as np
 
 from board import (
     BOARD_SIZE, TILE_SIZE, BOARD_OFFSET_X, BOARD_OFFSET_Y,
@@ -11,38 +9,8 @@ from board import (
 )
 from ui import Button
 
-#############################
-# ZOBRIST & HASH FUNCTIONS #
-#############################
-ZOBRIST = {}
-
-def owner_to_id(owner):
-    if owner == 'Player1':
-        return 0
-    elif owner == 'Player2':
-        return 1
-    return 2
-
-def initialize_zobrist():
-    global ZOBRIST
-    for row in range(BOARD_SIZE):
-        for col in range(BOARD_SIZE):
-            for owner_id in range(3):  # 0 (White), 1 (Black), 2 (None)
-                ZOBRIST[(row, col, owner_id)] = random.getrandbits(64)
-
-def get_board_hash(game):
-    h = 0
-    for p in game.pieces:
-        if p.row < 0 or p.col < 0:
-            continue
-        oid = owner_to_id(p.owner)
-        h ^= ZOBRIST[(p.row, p.col, oid)]
-    return h
-#############################
-
 pygame.init()
 
-# Fonts
 FONT_SMALL = pygame.font.SysFont('Arial', 20)
 FONT_MEDIUM = pygame.font.SysFont('Arial', 28)
 FONT_LARGE = pygame.font.SysFont('Arial', 54)
@@ -56,18 +24,14 @@ def quit_game():
     pygame.quit()
     sys.exit()
 
-# Initialize Zobrist hashing
-initialize_zobrist()
-
 class Fianco:
     def __init__(self):
         self.window = pygame.display.set_mode((WIDTH, HEIGHT))
-        pygame.display.set_caption('FIANCO GAME')
+        pygame.display.set_caption('FIANCO GAME (Human vs Human Test)')
         self.clock = pygame.time.Clock()
 
         self.state = 'menu'
         self.human_player = None
-        self.ai_player = None
 
         self.create_buttons()
 
@@ -84,23 +48,10 @@ class Fianco:
         self.captured_white = []
         self.captured_black = []
 
-        # 10 dakika (ms cinsinden)
         self.player_times = {'Player1': 600000, 'Player2': 600000}
         self.last_update_time = pygame.time.get_ticks()
 
-        # AI & Arama Değişkenleri
-        self.ttable = {}         # Transposition Table
-        self.prune_count = 0
-        self.nodes_searched = 0
-        self.total_prunes = 0
-        self.max_prune_per_move = 0
-        self.tt_accesses = 0     # TT erişim sayısı
         self.stats_printed = False
-
-        self.killer_moves = {}
-        self.iterative_time_limit = 2000
-        self.max_depth = 5
-
         self.winner_announce_start = 0
 
     def create_buttons(self):
@@ -117,7 +68,7 @@ class Fianco:
             y=HEIGHT // 2,
             width=menu_button_width,
             height=menu_button_height,
-            text='Play as White',
+            text='Play White',
             font=menu_button_font,
             bg_color=menu_button_bg,
             text_color=menu_button_text,
@@ -128,14 +79,13 @@ class Fianco:
             y=HEIGHT // 2,
             width=menu_button_width,
             height=menu_button_height,
-            text='Play as Black',
+            text='Play Black',
             font=menu_button_font,
             bg_color=menu_button_bg,
             text_color=menu_button_text,
             action=lambda: self.select_color('black')
         )
 
-        # Game Over Buttons
         game_over_button_width = 180
         game_over_button_height = 45
         game_over_button_font = pygame.font.SysFont('Arial', 22)
@@ -146,6 +96,7 @@ class Fianco:
         over_button_bg = BLACK
         over_button_text = WHITE
 
+        # "Restart Game" butonu
         self.game_over_restart_button = Button(
             x=side_bar_x,
             y=bottom_y,
@@ -157,6 +108,7 @@ class Fianco:
             text_color=over_button_text,
             action=self.back_to_menu
         )
+
         self.game_over_quit_button = Button(
             x=side_bar_x,
             y=bottom_y + game_over_button_height + 10,
@@ -168,14 +120,12 @@ class Fianco:
             text_color=over_button_text,
             action=quit_game
         )
-        import pygame
-        # Close error button
+
         close_button_font = pygame.font.SysFont('Arial', 24)
         close_button_text = close_button_font.render('X', True, WHITE)
         close_button_image = pygame.Surface((30, 30), pygame.SRCALPHA)
         close_button_image.blit(close_button_text, (5, 0))
 
-        import pygame
         close_button_rect = pygame.Rect(0, 0, 30, 30)
         close_button_rect.x = (self.window.get_width() - 50)
         close_button_rect.y = 10
@@ -200,10 +150,8 @@ class Fianco:
     def select_color(self, color):
         if color == 'white':
             self.human_player = 'Player1'
-            self.ai_player = 'Player2'
         else:
             self.human_player = 'Player2'
-            self.ai_player = 'Player1'
 
         self.reset_game()
         self.state = 'game'
@@ -244,6 +192,7 @@ class Fianco:
                 (BOARD_OFFSET_X + col * TILE_SIZE, BOARD_OFFSET_Y + BOARD_SIZE * TILE_SIZE),
                 1
             )
+
 
         if self.selected_piece:
             x = self.selected_piece.x
@@ -359,12 +308,12 @@ class Fianco:
         return r, c
 
     def remove_piece(self, piece):
+
         self.pieces.remove(piece)
         if piece.owner == 'Player1':
             self.captured_white.append(piece)
         else:
             self.captured_black.append(piece)
-
         piece.row = -1
         piece.col = -1
         piece.reset_position()
@@ -387,15 +336,15 @@ class Fianco:
         dr = r - piece.row
         dc = c - piece.col
 
-        # Back movement
+        # Back move prohibited
         if dr == -fw:
             return False, "", None
 
-        # Normal movement
+        # Normal forward
         if dr == fw and dc == 0:
             return True, "", None
 
-        # Side movement
+        # Side move
         elif dr == 0 and abs(dc) == 1:
             return True, "", None
 
@@ -411,13 +360,16 @@ class Fianco:
 
     def check_for_win(self):
         for piece in self.pieces:
+            # White -> en alta (row = BOARD_SIZE - 1)
             if piece.owner == 'Player1' and piece.row == BOARD_SIZE - 1:
                 return 'Player1'
+            # Black -> en üste (row = 0)
             elif piece.owner == 'Player2' and piece.row == 0:
                 return 'Player2'
         return None
 
     def check_for_piece_depletion(self):
+
         p1 = [p for p in self.pieces if p.owner == 'Player1']
         p2 = [p for p in self.pieces if p.owner == 'Player2']
         if not p1:
@@ -427,6 +379,7 @@ class Fianco:
         return None
 
     def reset_game(self):
+
         self.create_initial_pieces()
         self.selected_piece = None
         self.current_player = self.human_player
@@ -436,6 +389,7 @@ class Fianco:
         self.winner = None
         self.winner_name = ''
         self.must_continue_capture = False
+
         self.captured_white.clear()
         self.captured_black.clear()
 
@@ -443,35 +397,10 @@ class Fianco:
         self.player_times['Player2'] = 600000
         self.last_update_time = pygame.time.get_ticks()
 
-        self.ttable.clear()
-        self.prune_count = 0
-        self.nodes_searched = 0
-        self.total_prunes = 0
-        self.max_prune_per_move = 0
-        self.tt_accesses = 0
-        self.killer_moves.clear()
         self.stats_printed = False
 
-    def make_move(self, move, store_previous_state=False):
+    def make_move(self, move):
         piece, r, c, captured = move
-        prev = None
-        if store_previous_state:
-            prev = {
-                'piece': piece,
-                'piece_row': piece.row,
-                'piece_col': piece.col,
-                'captured_piece': captured,
-                'captured_row': captured.row if captured else None,
-                'captured_col': captured.col if captured else None,
-                'current_player': self.current_player,
-                'must_continue_capture': self.must_continue_capture,
-                'game_over': self.game_over,
-                'winner': self.winner,
-                'winner_name': self.winner_name,
-                'state': self.state,
-                'selected_piece': self.selected_piece
-            }
-
         piece.row = r
         piece.col = c
         piece.reset_position()
@@ -499,41 +428,8 @@ class Fianco:
                 if not self.must_continue_capture:
                     self.current_player = 'Player2' if self.current_player == 'Player1' else 'Player1'
 
-        if store_previous_state:
-            return prev
-
-
-        if not self.game_over and self.current_player == self.ai_player:
-            from ai import update_ai_time_limit, make_ai_move
-            update_ai_time_limit(self)
-            make_ai_move(self)
-
-    def unmake_move(self, prev):
-        piece = prev['piece']
-        piece.row = prev['piece_row']
-        piece.col = prev['piece_col']
-        piece.reset_position()
-
-        captured_piece = prev['captured_piece']
-        if captured_piece:
-            captured_piece.row = prev['captured_row']
-            captured_piece.col = prev['captured_col']
-            captured_piece.reset_position()
-            self.pieces.append(captured_piece)
-            if captured_piece.owner == 'Player1':
-                self.captured_white.remove(captured_piece)
-            else:
-                self.captured_black.remove(captured_piece)
-
-        self.current_player = prev['current_player']
-        self.must_continue_capture = prev['must_continue_capture']
-        self.game_over = prev['game_over']
-        self.winner = prev['winner']
-        self.winner_name = prev['winner_name']
-        self.state = prev['state']
-        self.selected_piece = prev['selected_piece']
-
     def has_available_captures(self, piece):
+
         if piece.owner == 'Player1':
             fw = 1
         else:
@@ -552,6 +448,7 @@ class Fianco:
         return False
 
     def handle_event_manual(self, event):
+
         if self.show_error:
             self.close_button.handle_event(event)
 
@@ -562,45 +459,138 @@ class Fianco:
 
         if self.state == 'game':
             if not self.game_over:
-                if self.current_player == self.human_player:
-                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                        pos = pygame.mouse.get_pos()
-                        if not self.selected_piece:
-                            # Taş seçme
-                            for p in self.pieces:
-                                rad = TILE_SIZE // 2 - 5
-                                dist = ((p.x - pos[0])**2 + (p.y - pos[1])**2)**0.5
-                                if dist <= rad and p.owner == self.current_player:
-                                    self.selected_piece = p
-                                    break
-                        else:
-                            rr, cc = self.get_mouse_board_position(pos)
-                            from ai import get_all_possible_capture_moves
-                            all_capture_moves = get_all_possible_capture_moves(self, self.current_player)
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    pos = pygame.mouse.get_pos()
+                    if not self.selected_piece:
+                        # Taş seçimi
+                        for p in self.pieces:
+                            rad = TILE_SIZE // 2 - 5
+                            dist = ((p.x - pos[0])**2 + (p.y - pos[1])**2)**0.5
+                            if dist <= rad and p.owner == self.current_player:
+                                self.selected_piece = p
+                                break
+                    else:
+                        # Taşı oynama
+                        rr, cc = self.get_mouse_board_position(pos)
+                        all_capture_moves = self.get_all_possible_capture_moves(self.current_player)
 
-                            if 0 <= rr < BOARD_SIZE and 0 <= cc < BOARD_SIZE:
-                                clicked_piece = self.get_piece_at_position(rr, cc)
-                                if clicked_piece and clicked_piece.owner == self.current_player:
-                                    self.selected_piece = clicked_piece
-                                else:
-                                    is_ok, _, cap = self.is_valid_move(self.selected_piece, rr, cc)
-                                    if is_ok:
-                                        if all_capture_moves and cap is None:
-                                            self.error_message = 'Capture is mandatory!'
-                                            self.show_error = True
-                                            self.error_start_time = pygame.time.get_ticks()
-                                        else:
-                                            self.make_move((self.selected_piece, rr, cc, cap))
-                                            self.error_message = ''
-                                            if self.game_over:
-                                                return
-                                    else:
-                                        self.error_message = 'Invalid Move!'
+                        if 0 <= rr < BOARD_SIZE and 0 <= cc < BOARD_SIZE:
+                            clicked_piece = self.get_piece_at_position(rr, cc)
+                            if clicked_piece and clicked_piece.owner == self.current_player:
+                                # Aynı renkten başka taşı seçtiyse
+                                self.selected_piece = clicked_piece
+                            else:
+                                is_ok, _, cap = self.is_valid_move(self.selected_piece, rr, cc)
+                                if is_ok:
+                                    # Zorunlu yeme varsa ama bu hamlede yeme yoksa hata
+                                    if all_capture_moves and cap is None:
+                                        self.error_message = 'Capture is mandatory!'
                                         self.show_error = True
                                         self.error_start_time = pygame.time.get_ticks()
-                            else:
-                                self.selected_piece = None
+                                    else:
+                                        # Hamleyi uygula
+                                        self.make_move((self.selected_piece, rr, cc, cap))
+                                else:
+                                    self.error_message = 'Invalid Move!'
+                                    self.show_error = True
+                                    self.error_start_time = pygame.time.get_ticks()
+                        else:
+                            self.selected_piece = None
 
         elif self.state == 'game_over':
             self.game_over_restart_button.handle_event(event)
             self.game_over_quit_button.handle_event(event)
+
+    def get_all_possible_capture_moves(self, player):
+
+        capture_moves = []
+        for piece in self.pieces:
+            if piece.owner == player:
+                if piece.row < 0 or piece.col < 0:
+                    continue
+
+                if piece.owner == 'Player1':
+                    fw = 1
+                else:
+                    fw = -1
+
+                for dc in [2, -2]:
+                    r_new = piece.row + fw * 2
+                    c_new = piece.col + dc
+                    if 0 <= r_new < BOARD_SIZE and 0 <= c_new < BOARD_SIZE:
+                        is_ok, _, cap = self.is_valid_move(piece, r_new, c_new)
+                        if is_ok and cap is not None:
+                            capture_moves.append((piece, r_new, c_new, cap))
+        return capture_moves
+
+def main():
+    game = Fianco()
+
+    while True:
+        elapsed = game.clock.tick(FPS)
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            game.handle_event_manual(event)
+
+        if game.state == 'game' and not game.game_over and not game.show_error:
+            game.player_times[game.current_player] -= elapsed
+            if game.player_times[game.current_player] <= 0:
+
+                game.player_times[game.current_player] = 0
+                game.winner = 'Player2' if game.current_player == 'Player1' else 'Player1'
+                game.game_over = True
+                game.winner_name = PLAYERS[game.winner]['name']
+                game.state = 'winner_announce'
+                game.winner_announce_start = pygame.time.get_ticks()
+
+        if game.show_error:
+            current_time = pygame.time.get_ticks()
+            if current_time - game.error_start_time > 2000:
+                game.show_error = False
+                game.error_message = ''
+
+        if game.state == 'menu':
+            game.window.fill(WOOD_COLOR)
+            game.menu_play_white_button.draw(game.window)
+            game.menu_play_black_button.draw(game.window)
+            pygame.display.flip()
+            continue
+
+        if game.state == 'game':
+            game.draw_board()
+            game.draw_timers()
+            if game.show_error and game.error_message:
+                game.display_error_message(game.error_message, game.close_button)
+
+        elif game.state == 'winner_announce':
+            game.window.fill(WOOD_COLOR)
+            announce_text = FONT_LARGE.render(f"{game.winner_name} Wins!", True, PLAYERS[game.winner]['color'])
+            announce_rect = announce_text.get_rect(center=(WIDTH // 2, HEIGHT // 2))
+            game.window.blit(announce_text, announce_rect)
+
+            now = pygame.time.get_ticks()
+            if now - game.winner_announce_start > 3000:
+                game.state = 'game_over'
+
+        elif game.state == 'game_over':
+            game.window.fill(WOOD_COLOR)
+            game.draw_board()
+            game.draw_timers()
+
+            game.game_over_restart_button.draw(game.window)
+            game.game_over_quit_button.draw(game.window)
+
+            if not game.stats_printed:
+                print("=== FINAL STATS ===")
+                print(f"White pieces left: {len([p for p in game.pieces if p.owner == 'Player1'])}")
+                print(f"Black pieces left: {len([p for p in game.pieces if p.owner == 'Player2'])}")
+                print(f"Captured by White: {len(game.captured_white)}")
+                print(f"Captured by Black: {len(game.captured_black)}")
+                game.stats_printed = True
+
+        pygame.display.flip()
+
+if __name__ == '__main__':
+    main()
